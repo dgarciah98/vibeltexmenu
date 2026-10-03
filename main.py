@@ -11,6 +11,7 @@ Fullscreen (1080×1920) Wii-style carousel game launcher with:
 import os
 import sys
 import subprocess
+import signal
 
 # Enable ASIO before any audio imports
 os.environ["SD_ENABLE_ASIO"] = "1"
@@ -156,6 +157,7 @@ def main():
                     print(f"[main] Launch failed: {e}")
                 # Kill the launcher immediately
                 audio.shutdown()
+                _kill_vigem_sdvxio()
                 pygame.quit()
                 sys.exit(0)
             else:
@@ -177,8 +179,22 @@ def main():
 
     # ── Cleanup ─────────────────────────────────────────────────────────
     audio.shutdown()
+    _kill_vigem_sdvxio()
     pygame.quit()
     print("[main] Goodbye.")
+
+
+def _kill_vigem_sdvxio():
+    """Terminate any running vigem-sdvxio.exe processes."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "vigem-sdvxio.exe"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("[main] Terminated vigem-sdvxio.exe")
+    except Exception as e:
+        print(f"[main] Could not kill vigem-sdvxio.exe: {e}")
 
 
 def _play_game_bgm(audio: AudioManager, game: dict):

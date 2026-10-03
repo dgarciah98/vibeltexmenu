@@ -21,15 +21,15 @@ class GridMenu:
         self.H = height
         self.show_inputs = show_inputs
         
-        # Grid settings
-        self.cols = 8
-        self.padding = 20
-        self.cover_w = (self.W - self.padding * (self.cols + 1)) // self.cols
-        self.cover_h = int(self.cover_w / COVER_ASPECT)
+        # Grid settings (2 horizontal rows)
+        self.rows = 2
+        self.padding = 40
+        self.cover_h = (self.H - self.padding * (self.rows + 1)) // self.rows
+        self.cover_w = int(self.cover_h * COVER_ASPECT)
         
-        # Scrolling
-        self.scroll_y = 0.0
-        self.target_scroll_y = 0.0
+        # Scrolling (Horizontal)
+        self.scroll_x = 0.0
+        self.target_scroll_x = 0.0
         self.max_scroll = 0.0
         
         self._calculate_max_scroll()
@@ -43,10 +43,10 @@ class GridMenu:
         
         # Input state
         self.is_dragging = False
-        self.drag_start_y = 0
+        self.drag_start_x = 0
         self.drag_start_scroll = 0
         self.drag_velocity = 0.0
-        self.last_mouse_y = 0
+        self.last_mouse_x = 0
         self.active_touches = []
         
         # Textures cache
@@ -71,9 +71,9 @@ class GridMenu:
         self._touch_tex.blend_mode = 1 # BLENDMODE_BLEND
         
     def _calculate_max_scroll(self):
-        rows = (len(self.games) + self.cols - 1) // self.cols
-        total_h = rows * (self.cover_h + self.padding) + self.padding
-        self.max_scroll = max(0, total_h - self.H)
+        total_cols = (len(self.games) + self.rows - 1) // self.rows
+        total_w = total_cols * (self.cover_w + self.padding) + self.padding
+        self.max_scroll = max(0, total_w - self.W)
 
     def _precache_covers(self):
         print("[grid_menu] Pre-caching textures for grid...")
@@ -105,21 +105,21 @@ class GridMenu:
             
     def _get_game_at_pos(self, x, y):
         # account for scroll
-        sy = y + self.scroll_y
+        sx = x + self.scroll_x
         
-        col = x // (self.cover_w + self.padding)
+        col = sx // (self.cover_w + self.padding)
         # offset by padding
-        if x < col * (self.cover_w + self.padding) + self.padding:
+        if sx < col * (self.cover_w + self.padding) + self.padding:
             return -1
         
-        row = sy // (self.cover_h + self.padding)
-        if sy < row * (self.cover_h + self.padding) + self.padding:
+        row = y // (self.cover_h + self.padding)
+        if y < row * (self.cover_h + self.padding) + self.padding:
             return -1
             
-        if col >= self.cols:
+        if row >= self.rows:
             return -1
             
-        idx = int(row * self.cols + col)
+        idx = int(col * self.rows + row)
         if 0 <= idx < len(self.games):
             return idx
         return -1
@@ -146,26 +146,26 @@ class GridMenu:
                 })
             
             self.is_dragging = True
-            self.drag_start_y = touch_y
-            self.drag_start_scroll = self.scroll_y
+            self.drag_start_x = touch_x
+            self.drag_start_scroll = self.scroll_x
             self.drag_velocity = 0
-            self.last_mouse_y = touch_y
+            self.last_mouse_x = touch_x
             
         elif event.type == pygame.MOUSEMOTION:
             if self.is_dragging:
-                dy = touch_y - self.last_mouse_y
-                self.drag_velocity = -dy
-                self.scroll_y += self.drag_velocity
+                dx = touch_x - self.last_mouse_x
+                self.drag_velocity = -dx
+                self.scroll_x += self.drag_velocity
                 # clamp
-                if self.scroll_y < 0: self.scroll_y = 0
-                if self.scroll_y > self.max_scroll: self.scroll_y = self.max_scroll
-                self.target_scroll_y = self.scroll_y
-                self.last_mouse_y = touch_y
+                if self.scroll_x < 0: self.scroll_x = 0
+                if self.scroll_x > self.max_scroll: self.scroll_x = self.max_scroll
+                self.target_scroll_x = self.scroll_x
+                self.last_mouse_x = touch_x
                 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             self.is_dragging = False
             # If the mouse barely moved, count it as a click
-            if abs(touch_y - self.drag_start_y) < 10:
+            if abs(touch_x - self.drag_start_x) < 10:
                 idx = self._get_game_at_pos(touch_x, touch_y)
                 if idx != -1:
                     self._on_game_clicked(idx)
@@ -207,32 +207,32 @@ class GridMenu:
         if not self.is_dragging:
             # apply inertia
             if abs(self.drag_velocity) > 0.1:
-                self.scroll_y += self.drag_velocity
+                self.scroll_x += self.drag_velocity
                 self.drag_velocity *= 0.9  # friction
-                if self.scroll_y < 0:
-                    self.scroll_y = 0
+                if self.scroll_x < 0:
+                    self.scroll_x = 0
                     self.drag_velocity = 0
-                elif self.scroll_y > self.max_scroll:
-                    self.scroll_y = self.max_scroll
+                elif self.scroll_x > self.max_scroll:
+                    self.scroll_x = self.max_scroll
                     self.drag_velocity = 0
-            self.target_scroll_y = self.scroll_y
+            self.target_scroll_x = self.scroll_x
 
     def draw(self):
         self.renderer.draw_color = COL_BG
         self.renderer.clear()
         
         # Draw grid
-        start_row = int(self.scroll_y // (self.cover_h + self.padding))
-        end_row = int((self.scroll_y + self.H) // (self.cover_h + self.padding)) + 1
+        start_col = int(self.scroll_x // (self.cover_w + self.padding))
+        end_col = int((self.scroll_x + self.W) // (self.cover_w + self.padding)) + 1
         
-        for row in range(start_row, end_row + 1):
-            for col in range(self.cols):
-                idx = row * self.cols + col
+        for col in range(start_col, end_col + 1):
+            for row in range(self.rows):
+                idx = col * self.rows + row
                 if idx >= len(self.games):
                     break
                     
-                x = self.padding + col * (self.cover_w + self.padding)
-                y = self.padding + row * (self.cover_h + self.padding) - int(self.scroll_y)
+                x = self.padding + col * (self.cover_w + self.padding) - int(self.scroll_x)
+                y = self.padding + row * (self.cover_h + self.padding)
                 
                 tex = self.cover_textures.get(idx)
                 if tex:

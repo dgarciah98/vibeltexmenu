@@ -45,7 +45,9 @@ class InputManager:
             self._bindings[action] = dict(bind)
 
         self._cooldown_ms = input_cfg.get("navigate_cooldown_ms", 250)
-        self._deadzone = input_cfg.get("axis_deadzone", 0.5)
+        default_dz = input_cfg.get("axis_deadzone", 0.5)
+        self._left_deadzone = input_cfg.get("left_stick_deadzone", default_dz)
+        self._right_deadzone = input_cfg.get("right_stick_deadzone", default_dz)
 
         # Timestamps of last trigger per action (for debounce)
         self._last_trigger: dict[str, float] = {}
@@ -116,21 +118,41 @@ class InputManager:
 
         # Poll analog stick axes for navigation
         # Left stick: axis 0 = X (left/right), axis 1 = Y (up/down)
+        # Right stick: axis 2 = X (left/right), axis 3 = Y (up/down)  [Xbox layout]
         axis_actions: set[str] = set()
         if self._joystick is not None:
             try:
                 ax0 = self._joystick.get_axis(0)  # left stick X
                 ax1 = self._joystick.get_axis(1)  # left stick Y
-                if ax0 < -self._deadzone:
+                ldz = self._left_deadzone
+                if ax0 < -ldz:
                     axis_actions.add("navigate_left")
-                elif ax0 > self._deadzone:
+                elif ax0 > ldz:
                     axis_actions.add("navigate_right")
-                if ax1 < -self._deadzone:
+                if ax1 < -ldz:
                     axis_actions.add("navigate_up")
                     axis_actions.add("launch_script_up")
-                elif ax1 > self._deadzone:
+                elif ax1 > ldz:
                     axis_actions.add("navigate_down")
                     axis_actions.add("launch_script_down")
+            except Exception:
+                pass
+            try:
+                num_axes = self._joystick.get_numaxes()
+                if num_axes > 3:
+                    ax2 = self._joystick.get_axis(2)  # right stick X
+                    ax3 = self._joystick.get_axis(3)  # right stick Y
+                    rdz = self._right_deadzone
+                    if ax2 < -rdz:
+                        axis_actions.add("navigate_left")
+                    elif ax2 > rdz:
+                        axis_actions.add("navigate_right")
+                    if ax3 < -rdz:
+                        axis_actions.add("navigate_up")
+                        axis_actions.add("launch_script_up")
+                    elif ax3 > rdz:
+                        axis_actions.add("navigate_down")
+                        axis_actions.add("launch_script_down")
             except Exception:
                 pass
 
@@ -188,7 +210,7 @@ class InputManager:
                 val = self._joystick.get_axis(idx)
             except Exception:
                 return False
-            threshold = bind.get("threshold", self._deadzone)
+            threshold = bind.get("threshold", self._left_deadzone)
             if threshold >= 0:
                 return val > threshold
             else:
