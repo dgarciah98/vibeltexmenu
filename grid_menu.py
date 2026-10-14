@@ -1,4 +1,5 @@
 import os
+import math
 import pygame
 import pygame._sdl2.video as video
 from carousel import _load_custom_font
@@ -14,12 +15,15 @@ COL_SUBMENU_TXT  = (220, 220, 240, 255)
 COVER_ASPECT = 9 / 16
 
 class GridMenu:
-    def __init__(self, renderer: video.Renderer, games: list[dict], width: int, height: int, font_dir: str = "font", show_inputs: bool = False):
+    def __init__(self, renderer: video.Renderer, games: list[dict], width: int, height: int,
+                 font_dir: str = "font", show_inputs: bool = False,
+                 base_covers: dict[int, pygame.Surface | None] | None = None):
         self.renderer = renderer
         self.games = games
         self.W = width
         self.H = height
         self.show_inputs = show_inputs
+        self.selected_idx = 0
         
         # Grid settings (2 horizontal rows)
         self.rows = 2
@@ -60,7 +64,7 @@ class GridMenu:
         if self.show_inputs:
             self._init_touch_indicator()
         
-        self._precache_covers()
+        self._precache_covers(base_covers)
         
     def _init_touch_indicator(self):
         size = 100
@@ -75,25 +79,28 @@ class GridMenu:
         total_w = total_cols * (self.cover_w + self.padding) + self.padding
         self.max_scroll = max(0, total_w - self.W)
 
-    def _precache_covers(self):
+    def _precache_covers(self, base_covers: dict[int, pygame.Surface | None] | None = None):
         print("[grid_menu] Pre-caching textures for grid...")
         for i, g in enumerate(self.games):
-            path = g.get("bg_image_path")
             surf = None
-            if path and os.path.isfile(path):
-                try:
-                    img = pygame.image.load(path).convert()
-                    iw, ih = img.get_size()
-                    # scale and center crop
-                    import math
-                    scale = max(self.cover_w / iw, self.cover_h / ih)
-                    new_w, new_h = max(self.cover_w, math.ceil(iw * scale)), max(self.cover_h, math.ceil(ih * scale))
-                    img = pygame.transform.smoothscale(img, (new_w, new_h))
-                    cx = max(0, (new_w - self.cover_w) // 2)
-                    cy = max(0, (new_h - self.cover_h) // 2)
-                    surf = img.subsurface((cx, cy, self.cover_w, self.cover_h)).copy()
-                except Exception:
-                    pass
+            if base_covers and base_covers.get(i) is not None:
+                # Fast downscale from carousel's 9:16 cover (~1.5ms per game)
+                surf = pygame.transform.smoothscale(base_covers[i], (self.cover_w, self.cover_h))
+            else:
+                path = g.get("bg_image_path")
+                if path and os.path.isfile(path):
+                    try:
+                        img = pygame.image.load(path).convert()
+                        iw, ih = img.get_size()
+                        import math
+                        scale = max(self.cover_w / iw, self.cover_h / ih)
+                        new_w, new_h = max(self.cover_w, math.ceil(iw * scale)), max(self.cover_h, math.ceil(ih * scale))
+                        img = pygame.transform.smoothscale(img, (new_w, new_h))
+                        cx = max(0, (new_w - self.cover_w) // 2)
+                        cy = max(0, (new_h - self.cover_h) // 2)
+                        surf = img.subsurface((cx, cy, self.cover_w, self.cover_h)).copy()
+                    except Exception:
+                        pass
             
             if not surf:
                 surf = pygame.Surface((self.cover_w, self.cover_h))
@@ -203,26 +210,49 @@ class GridMenu:
             self.submenu_scripts = scripts
             self.submenu_open = True
 
-    def update(self, dt):
+    def sync_selected(self, idx: int):
+        """Keep grid selection and viewport smoothly synchronized with Carousel."""
+        self.selected_idx = idx
+        if 0 <= idx < len(self.games) and not self.is_dragging:
+            col = idx // self.rows
+            card_left = self.padding + col * (self.cover_w + self.padding)
+            card_right = card_left + self.cover_w
+            margin = self.cover_w // 2
+            if card_left < self.scroll_x + margin:
+                self.target_scroll_x = max(0, card_left - margin)
+            elif card_right > self.scroll_x + self.W - margin:
+                self.target_scroll_x = min(self.max_scroll, card_right + margin - self.W)
+
+    def update(self, dt: float):
         if not self.is_dragging:
-            # apply inertia
-            if abs(self.drag_velocity) > 0.1:
-                self.scroll_x += self.drag_velocity
-                self.drag_velocity *= 0.9  # friction
-                if self.scroll_x < 0:
-                    self.scroll_x = 0
-                    self.drag_velocity = 0
-                elif self.scroll_x > self.max_scroll:
-                    self.scroll_x = self.max_scroll
-                    self.drag_velocity = 0
-            self.target_scroll_x = self.scroll_x
+            # Apply smooth velocity decay (frame-rate independent)
+            if abs(self.drag_velocity) > 0.05:
+                self.scroll_x += self.drag_velocity * (dt * 60.0)
+                decay = math.exp(-5.0 * dt)
+                self.drag_velocity *= decay
+            else:
+                self.drag_velocity = 0.0
+
+            # Rubber-band spring bounce when overscrolling edges
+            if self.scroll_x < 0:
+                spring = 1.0 - math.exp(-12.0 * dt)
+                self.scroll_x += (0 - self.scroll_x) * spring
+                self.drag_velocity *= 0.5
+            elif self.scroll_x > self.max_scroll:
+                spring = 1.0 - math.exp(-12.0 * dt)
+                self.scroll_x += (self.max_scroll - self.scroll_x) * spring
+                self.drag_velocity *= 0.5
+            elif abs(self.target_scroll_x - self.scroll_x) > 0.5:
+                # Smooth glide toward target scroll (e.g. from carousel navigation)
+                glide = 1.0 - math.exp(-8.0 * dt)
+                self.scroll_x += (self.target_scroll_x - self.scroll_x) * glide
 
     def draw(self):
         self.renderer.draw_color = COL_BG
         self.renderer.clear()
         
         # Draw grid
-        start_col = int(self.scroll_x // (self.cover_w + self.padding))
+        start_col = max(0, int(self.scroll_x // (self.cover_w + self.padding)))
         end_col = int((self.scroll_x + self.W) // (self.cover_w + self.padding)) + 1
         
         for col in range(start_col, end_col + 1):
@@ -237,6 +267,14 @@ class GridMenu:
                 tex = self.cover_textures.get(idx)
                 if tex:
                     tex.draw(dstrect=(x, y, self.cover_w, self.cover_h))
+
+                # Highlight the game currently selected on primary display
+                if idx == self.selected_idx:
+                    now = pygame.time.get_ticks()
+                    pulse = 0.5 + 0.5 * math.sin(now * 0.005)
+                    self.renderer.draw_color = (90, 140, 255, int(150 + pulse * 105))
+                    for b in range(3):
+                        self.renderer.draw_rect((x - b - 1, y - b - 1, self.cover_w + (b + 1) * 2, self.cover_h + (b + 1) * 2))
                     
         # Draw Submenu
         if self.submenu_open:

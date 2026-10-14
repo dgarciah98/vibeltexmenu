@@ -11,7 +11,6 @@ Fullscreen (1080×1920) Wii-style carousel game launcher with:
 import os
 import sys
 import subprocess
-import signal
 
 # Enable ASIO before any audio imports
 os.environ["SD_ENABLE_ASIO"] = "1"
@@ -65,7 +64,20 @@ def main():
     # Use SDL macro trick to center on specific monitor
     pos = video.WINDOWPOS_CENTERED | SEC_MONITOR
     window2 = video.Window("Secondary Window", size=(sec_w, sec_h), position=(pos, pos))
-    renderer = video.Renderer(window2)
+
+    # Select fastest modern hardware renderer (bypasses Direct3D 9 timeout, saves ~1.1s)
+    def _create_fast_renderer(win: video.Window) -> video.Renderer:
+        target_drivers = ["direct3d11", "opengl", "direct3d12"]
+        available = {d.name: i for i, d in enumerate(video.get_drivers())}
+        for preferred in target_drivers:
+            if preferred in available:
+                try:
+                    return video.Renderer(win, index=available[preferred])
+                except Exception:
+                    pass
+        return video.Renderer(win)
+
+    renderer = _create_fast_renderer(window2)
 
     # ── Subsystems ──────────────────────────────────────────────────────
     audio = AudioManager(settings)
@@ -73,7 +85,8 @@ def main():
 
     font_dir = os.path.join(base_dir(), "font")
     carousel = Carousel(games, WIDTH, HEIGHT, font_dir=font_dir)
-    grid_menu = GridMenu(renderer, games, sec_w, sec_h, font_dir=font_dir, show_inputs=SHOW_INPUTS)
+    grid_menu = GridMenu(renderer, games, sec_w, sec_h, font_dir=font_dir, show_inputs=SHOW_INPUTS,
+                         base_covers=carousel.get_cover_surfaces())
     
     input_font = _load_custom_font(font_dir, int(HEIGHT * 0.02))
     input_displays = []
@@ -119,7 +132,11 @@ def main():
             continue
 
         carousel.update(dt, actions)
+        grid_menu.sync_selected(carousel.current_index)
         grid_menu.update(dt)
+
+        # ── Update SDVX Wing Lights from Background ─────────────────────
+        inp.update_wing_lights(carousel.get_current_wing_colors())
 
         # ── BGM change on selection change ──────────────────────────────
         if carousel.current_index != last_bgm_index:
@@ -156,8 +173,8 @@ def main():
                 except Exception as e:
                     print(f"[main] Launch failed: {e}")
                 # Kill the launcher immediately
+                inp.shutdown()
                 audio.shutdown()
-                _kill_vigem_sdvxio()
                 pygame.quit()
                 sys.exit(0)
             else:
@@ -178,23 +195,10 @@ def main():
         grid_menu.draw()
 
     # ── Cleanup ─────────────────────────────────────────────────────────
+    inp.shutdown()
     audio.shutdown()
-    _kill_vigem_sdvxio()
     pygame.quit()
     print("[main] Goodbye.")
-
-
-def _kill_vigem_sdvxio():
-    """Terminate any running vigem-sdvxio.exe processes."""
-    try:
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "vigem-sdvxio.exe"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        print("[main] Terminated vigem-sdvxio.exe")
-    except Exception as e:
-        print(f"[main] Could not kill vigem-sdvxio.exe: {e}")
 
 
 def _play_game_bgm(audio: AudioManager, game: dict):

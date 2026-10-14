@@ -13,6 +13,9 @@ All images are forced to 1080×1920 (or a cover-sized crop thereof).
 
 import os
 import math
+import colorsys
+import threading
+import concurrent.futures
 import pygame
 
 # ── Colours ─────────────────────────────────────────────────────────────────
@@ -102,10 +105,12 @@ class Carousel:
         # Smooth scroll: _scroll_pos is the floating-point "current position"
         # that lerps toward _index for smooth transitions
         self._scroll_pos = 0.0
-        self._scroll_speed = 8.0     # lerp speed (higher = faster snap)
+        self._scroll_speed = 9.5     # fluid, responsive arcade glide
 
-        # Sub-menu state
+        # Sub-menu state & smooth animations
         self._submenu_open = False
+        self._submenu_anim = 0.0
+        self._submenu_sel_y = 0.0
         self._submenu_index = 0
         self._submenu_scripts: list[dict] = []
 
@@ -124,35 +129,60 @@ class Carousel:
         self._cover_h = int(height * 0.50)
         self._cover_w = int(self._cover_h * COVER_ASPECT)
 
-        # Pre-load, force to 1080×1920, then create cover thumbnails + screen-sized BGs
+        # Threaded pre-load and deduplication of background images
         self._bg_screen: dict[int, pygame.Surface | None] = {}   # pre-scaled to screen
         self._covers: dict[int, pygame.Surface | None] = {}      # cover thumbnails
+        self._wing_colors: dict[int, dict] = {}                  # theme colors for wing lighting
+
+        unique_paths = list({g.get("bg_image_path") for g in games if g.get("bg_image_path")})
+
+        def _load_asset(p: str):
+            full = self._load_and_force_1080x1920(p)
+            if full is None:
+                return p, (None, None, self._default_wing_colors())
+            if full.get_size() == (width, height):
+                bg = full
+            else:
+                bg = pygame.transform.smoothscale(full, (width, height))
+            cov = pygame.transform.smoothscale(full, (self._cover_w, self._cover_h))
+            wc = self._extract_wing_colors(full)
+            return p, (bg, cov, wc)
+
+        asset_cache = {}
+        if unique_paths:
+            workers = min(4, len(unique_paths))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                for p, assets in executor.map(_load_asset, unique_paths):
+                    asset_cache[p] = assets
+
         for i, g in enumerate(games):
-            full = self._load_and_force_1080x1920(g["bg_image_path"])
-            if full is not None:
-                self._bg_screen[i] = pygame.transform.smoothscale(full, (width, height))
-                self._covers[i] = pygame.transform.smoothscale(
-                    full, (self._cover_w, self._cover_h))
+            p = g.get("bg_image_path")
+            if p and p in asset_cache and asset_cache[p][0] is not None:
+                bg, cov, wc = asset_cache[p]
+                self._bg_screen[i] = bg
+                self._covers[i] = cov
+                self._wing_colors[i] = wc
             else:
                 self._bg_screen[i] = None
                 self._covers[i] = self._make_placeholder_cover(g["name"])
+                self._wing_colors[i] = self._default_wing_colors()
 
         # Pre-create the darkened overlay (reused every frame)
         self._overlay = pygame.Surface((width, height), pygame.SRCALPHA)
         self._overlay.fill((0, 0, 0, 120))
 
-        # ── Precompute ALL cover variants at boot ───────────────────────
-        # For each game, at each quantized offset, pre-scale+rotate+darken
-        # so the render loop does ZERO transforms per frame.
+        # ── Precompute cover variants in parallel across CPU cores ──────
         self._offset_step = 0.1
         self._max_offset = 3.0
         self._precomputed: dict[tuple[int, float], tuple[pygame.Surface, int, int]] = {}
-        print("[carousel] Precomputing cover variants...")
         self._precompute_all()
-        print(f"[carousel] Precomputed {len(self._precomputed)} surfaces.")
 
         # Result (set by caller after sub-menu confirm)
         self.launch_request: dict | None = None
+
+    def get_cover_surfaces(self) -> dict[int, pygame.Surface | None]:
+        """Return pre-scaled 9:16 cover surfaces for use by secondary screen (GridMenu)."""
+        return self._covers
 
     # ── Image loading ───────────────────────────────────────────────────────
 
@@ -166,13 +196,19 @@ class Carousel:
             else:
                 return None
         try:
-            img = pygame.image.load(path).convert()
+            img = pygame.image.load(path)
+            if pygame.display.get_surface() is not None:
+                img = img.convert()
         except Exception as e:
             print(f"[carousel] Failed to load: {path}: {e}")
             return None
 
         iw, ih = img.get_size()
         target_w, target_h = 1080, 1920
+
+        # Fast path if image is already target size
+        if iw == target_w and ih == target_h:
+            return img
 
         # Scale to fill (cover), then center-crop
         scale_w = target_w / iw
@@ -237,6 +273,90 @@ class Carousel:
         font = _load_custom_font(self._font_dir, min_size)
         return font.render(text, True, color)
 
+    # ── Wing Lighting ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _default_wing_colors() -> dict:
+        return {
+            "upper_left": (90, 140, 255),
+            "lower_left": (90, 140, 255),
+            "upper_right": (90, 140, 255),
+            "lower_right": (90, 140, 255),
+            "woofer": (60, 90, 180),
+            "controller": (90, 140, 255),
+        }
+
+    def _extract_wing_colors(self, surf: pygame.Surface) -> dict:
+        w, h = surf.get_size()
+        quads = {
+            "upper_left": (0, 0, w // 2, h // 2),
+            "lower_left": (0, h // 2, w // 2, h // 2),
+            "upper_right": (w // 2, 0, w // 2, h // 2),
+            "lower_right": (w // 2, h // 2, w // 2, h // 2),
+            "controller": (int(w * 0.25), int(h * 0.5), int(w * 0.5), int(h * 0.5)),
+        }
+        results = {}
+        for name, rect in quads.items():
+            sub = surf.subsurface(rect)
+            thumb = pygame.transform.smoothscale(sub, (24, 24))
+            weighted_r, weighted_g, weighted_b, total_weight = 0.0, 0.0, 0.0, 0.0
+            for y in range(24):
+                for x in range(24):
+                    r, g, b, _ = thumb.get_at((x, y))
+                    h_val, s_val, v_val = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+                    weight = (s_val ** 1.3) * (v_val ** 1.2) + 0.01
+                    weighted_r += r * weight
+                    weighted_g += g * weight
+                    weighted_b += b * weight
+                    total_weight += weight
+            if total_weight > 0:
+                r = weighted_r / total_weight
+                g = weighted_g / total_weight
+                b = weighted_b / total_weight
+                mx = max(r, g, b, 1.0)
+                scale = min(230.0 / mx, 3.5)
+                results[name] = (min(255, int(r * scale)), min(255, int(g * scale)), min(255, int(b * scale)))
+            else:
+                results[name] = (90, 140, 255)
+        results["woofer"] = (
+            int(results["lower_left"][0] * 0.5 + results["lower_right"][0] * 0.5),
+            int(results["lower_left"][1] * 0.5 + results["lower_right"][1] * 0.5),
+            int(results["lower_left"][2] * 0.5 + results["lower_right"][2] * 0.5),
+        )
+        return results
+
+    def get_current_wing_colors(self) -> dict:
+        """Return smoothly interpolated wing colors matching current carousel scroll position."""
+        n = len(self.games)
+        if n == 0 or not self._wing_colors:
+            return self._default_wing_colors()
+
+        sp = self._scroll_pos % n
+        idx0 = int(math.floor(sp)) % n
+        idx1 = (idx0 + 1) % n
+        t = sp - math.floor(sp)
+
+        c0 = self._wing_colors.get(idx0, self._default_wing_colors())
+        c1 = self._wing_colors.get(idx1, self._default_wing_colors())
+
+        def lerp(k):
+            a = c0[k]
+            b = c1[k]
+            return (
+                int(a[0] + (b[0] - a[0]) * t),
+                int(a[1] + (b[1] - a[1]) * t),
+                int(a[2] + (b[2] - a[2]) * t),
+            )
+
+        return {
+            "upper_left": lerp("upper_left"),
+            "lower_left": lerp("lower_left"),
+            "upper_right": lerp("upper_right"),
+            "lower_right": lerp("lower_right"),
+            "woofer": lerp("woofer"),
+            "controller": lerp("controller"),
+        }
+
     # ── Update ──────────────────────────────────────────────────────────────
 
     @property
@@ -252,7 +372,7 @@ class Carousel:
         self.launch_request = None
         n = len(self.games)
 
-        # Smoothly lerp scroll position toward target index
+        # Smoothly glide scroll position toward target index
         if n > 0:
             target = float(self._index)
             diff = target - self._scroll_pos
@@ -262,9 +382,20 @@ class Carousel:
                     diff -= n
                 else:
                     diff += n
-            self._scroll_pos += diff * min(1.0, dt * self._scroll_speed)
-            # Keep scroll_pos in [0, n) range
+            
+            # Frame-rate independent exponential smoothing
+            decay = 1.0 - math.exp(-self._scroll_speed * dt)
+            self._scroll_pos += diff * decay
+            if abs(diff) < 0.001:
+                self._scroll_pos = target
             self._scroll_pos = self._scroll_pos % n
+
+        # Smoothly animate sub-menu in/out
+        target_anim = 1.0 if self._submenu_open else 0.0
+        anim_speed = 14.0
+        self._submenu_anim += (target_anim - self._submenu_anim) * (1.0 - math.exp(-anim_speed * dt))
+        if abs(target_anim - self._submenu_anim) < 0.005:
+            self._submenu_anim = target_anim
 
         if not self.games:
             return
@@ -306,21 +437,21 @@ class Carousel:
     # ── Draw ────────────────────────────────────────────────────────────────
 
     def draw(self, screen: pygame.Surface):
-        """Render the full carousel frame."""
+        """Render the full carousel frame with buttery smooth transitions."""
         if not self.games:
             screen.fill(COL_BG)
             label = self._font_title.render("No games loaded", True, COL_TITLE)
             screen.blit(label, label.get_rect(center=(self.W // 2, self.H // 2)))
             return
 
-        # Compute how close we are to settled (for BG crossfade)
+        # Compute how close we are to settled
         n = len(self.games)
         diff_to_target = self._index - self._scroll_pos
         if abs(diff_to_target) > n / 2:
             diff_to_target = diff_to_target - n if diff_to_target > 0 else diff_to_target + n
-        t = 1.0 - min(1.0, abs(diff_to_target) * 2.0)  # 0=moving, 1=settled
+        t = 1.0 - min(1.0, abs(diff_to_target) * 2.0)
 
-        # ── Background (current game, crossfading) ──────────────────────
+        # ── Background (continuous cinematic crossfade) ─────────────────
         self._draw_background(screen, t)
 
         # ── Darkened overlay for contrast (pre-created) ──────────────────
@@ -329,22 +460,45 @@ class Carousel:
         # ── Cover flow ──────────────────────────────────────────────────
         self._draw_covers(screen, t)
 
-        # ── Game title (auto-scaled to fit) ─────────────────────────────
-        # Position title at the top of the screen
+        # ── Game title (smooth crossfade & drift matching scroll_pos) ──
         title_y = int(self.H * 0.06)
-        name = self.games[self._index]["name"]
         max_title_w = self.W - self._title_margin * 2
-        title_surf = self._render_fitted_text(name, COL_TITLE, max_title_w)
-        title_rect = title_surf.get_rect(center=(self.W // 2, title_y))
-        screen.blit(title_surf, title_rect)
+
+        sp = self._scroll_pos % n
+        idx0 = int(math.floor(sp)) % n
+        idx1 = (idx0 + 1) % n
+        blend = sp - math.floor(sp)
+        smooth_b = blend * blend * (3.0 - 2.0 * blend)
+
+        name0 = self.games[idx0]["name"]
+        title0 = self._render_fitted_text(name0, COL_TITLE, max_title_w)
+
+        if idx0 == idx1 or smooth_b < 0.005:
+            screen.blit(title0, title0.get_rect(center=(self.W // 2, title_y)))
+        elif smooth_b > 0.995:
+            name1 = self.games[idx1]["name"]
+            title1 = self._render_fitted_text(name1, COL_TITLE, max_title_w)
+            screen.blit(title1, title1.get_rect(center=(self.W // 2, title_y)))
+        else:
+            name1 = self.games[idx1]["name"]
+            title1 = self._render_fitted_text(name1, COL_TITLE, max_title_w)
+
+            drift = int(smooth_b * 24)
+            title0.set_alpha(int(255 * (1.0 - smooth_b)))
+            screen.blit(title0, title0.get_rect(center=(self.W // 2 - drift, title_y)))
+            title0.set_alpha(255)
+
+            title1.set_alpha(int(255 * smooth_b))
+            screen.blit(title1, title1.get_rect(center=(self.W // 2 + 24 - drift, title_y)))
+            title1.set_alpha(255)
 
         # Script count hint
         n_scripts = len(self.games[self._index].get("launch_scripts", []))
         if n_scripts > 1:
             hint = self._font_hint.render(f"{n_scripts} launch options", True, COL_ACCENT)
-            screen.blit(hint, hint.get_rect(center=(self.W // 2, title_y + title_surf.get_height() + 8)))
+            screen.blit(hint, hint.get_rect(center=(self.W // 2, title_y + title0.get_height() + 8)))
 
-        # ── Navigation arrows ──────────────────────────────────────────
+        # ── Navigation arrows (floating & pulsing) ─────────────────────
         self._draw_arrows(screen)
 
         # ── Bottom hints ────────────────────────────────────────────────
@@ -355,69 +509,83 @@ class Carousel:
                                          max_size=int(self.H * 0.013))
         screen.blit(hints, hints.get_rect(center=(self.W // 2, hint_y)))
 
-        # ── Sub-menu ────────────────────────────────────────────────────
-        if self._submenu_open:
+        # ── Sub-menu (smooth pop-in & sliding pill) ────────────────────
+        if self._submenu_open or self._submenu_anim > 0.001:
             self._draw_submenu(screen)
 
     # ── Background ──────────────────────────────────────────────────────────
 
     def _draw_background(self, screen: pygame.Surface, t: float):
-        """Draw the fullscreen BG image with crossfade."""
-        screen.fill(COL_BG)
-        prev_bg = self._bg_screen.get(self._prev_index)
-        curr_bg = self._bg_screen.get(self._index)
+        """Draw fullscreen BG with continuous smooth crossfade matching scroll_pos."""
+        n = len(self.games)
+        if n == 0:
+            screen.fill(COL_BG)
+            return
 
-        if curr_bg and prev_bg and t < 1.0 and self._prev_index != self._index:
-            # BGs are already screen-sized — just blit with alpha
-            prev_bg.set_alpha(int(255 * (1 - t)))
-            screen.blit(prev_bg, (0, 0))
-            prev_bg.set_alpha(255)
-            curr_bg.set_alpha(int(255 * t))
-            screen.blit(curr_bg, (0, 0))
-            curr_bg.set_alpha(255)
-        elif curr_bg:
-            screen.blit(curr_bg, (0, 0))
+        sp = self._scroll_pos % n
+        idx0 = int(math.floor(sp)) % n
+        idx1 = (idx0 + 1) % n
+        blend = sp - math.floor(sp)
+
+        smooth_b = blend * blend * (3.0 - 2.0 * blend)
+
+        bg0 = self._bg_screen.get(idx0)
+        bg1 = self._bg_screen.get(idx1)
+
+        screen.fill(COL_BG)
+        if bg0 and (smooth_b < 0.999 or not bg1):
+            screen.blit(bg0, (0, 0))
+        if bg1 and smooth_b > 0.001 and idx0 != idx1:
+            bg1.set_alpha(int(255 * smooth_b))
+            screen.blit(bg1, (0, 0))
+            bg1.set_alpha(255)
 
     # ── Cover Flow ──────────────────────────────────────────────────────────
 
     def _precompute_all(self):
-        """Precompute scaled+rotated cover surfaces for every game at every offset step."""
+        """Precompute scaled+rotated cover surfaces in parallel across CPU cores at boot."""
         step = self._offset_step
         max_off = self._max_offset
         n = len(self.games)
 
-        # Generate all quantized offsets: -3.0, -2.75, ..., 0, ..., 2.75, 3.0
         offsets = []
         q = -max_off
         while q <= max_off + 0.001:
             offsets.append(round(q, 2))
             q += step
 
-        for gi in range(n):
+        def _worker(gi: int):
             cover = self._covers.get(gi)
             if cover is None:
-                continue
-
-            for q in offsets:
-                dist = abs(q)
-                scale_factor = max(0.50, 1.0 - dist * 0.12)
-                cw = int(self._cover_w * scale_factor)
-                ch = int(self._cover_h * scale_factor)
+                return gi, {}
+            game_dict = {}
+            for q_val in offsets:
+                if q_val == 0.0:
+                    game_dict[0.0] = (cover.copy(), self._cover_w, self._cover_h)
+                    continue
+                dist = abs(q_val)
+                sf = max(0.50, 1.0 - dist * 0.12)
+                cw = int(self._cover_w * sf)
+                ch = int(self._cover_h * sf)
                 if cw < 10 or ch < 10:
                     continue
-
-                # Scale (use smoothscale at boot, it's a one-time cost)
                 scaled = pygame.transform.smoothscale(cover, (cw, ch))
-
-                # Rotation — use rotozoom for anti-aliased (smooth) edges
-                rotation_angle = -q * 8
+                rotation_angle = -q_val * 8
                 rotation_angle = max(-20, min(20, rotation_angle))
                 if abs(rotation_angle) > 0.5:
-                    alpha_surf = scaled.convert_alpha()
+                    try:
+                        alpha_surf = scaled.convert_alpha()
+                    except pygame.error:
+                        alpha_surf = scaled
                     scaled = pygame.transform.rotozoom(alpha_surf, rotation_angle, 1.0)
+                game_dict[q_val] = (scaled, scaled.get_width(), scaled.get_height())
+            return gi, game_dict
 
-                rw, rh = scaled.get_size()
-                self._precomputed[(gi, q)] = (scaled, rw, rh)
+        workers = min(8, max(1, n))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for gi, game_dict in executor.map(_worker, range(n)):
+                for q_val, entry in game_dict.items():
+                    self._precomputed[(gi, q_val)] = entry
 
     def _draw_covers(self, screen: pygame.Surface, t: float):
         """Draw covers using precomputed surfaces — zero transforms per frame."""
@@ -460,13 +628,36 @@ class Carousel:
             key = (gi, q)
             entry = self._precomputed.get(key)
             if entry is None:
-                continue
+                # Fallback to center cover if out of quantized range
+                cover = self._covers.get(gi)
+                if cover is not None:
+                    entry = (cover, self._cover_w, self._cover_h)
+                else:
+                    continue
 
             surf, rw, rh = entry
 
-            # Alpha for side covers
+            # Breathing neon aura around settled center cover
+            if dist < 0.15:
+                now = pygame.time.get_ticks()
+                pulse = 0.5 + 0.5 * math.sin(now * 0.004)
+                aura_alpha = int((35 + pulse * 55) * (1.0 - dist / 0.15))
+                aura_margin = 8 + int(pulse * 4)
+
+                aura_rect = pygame.Rect(
+                    int(x) - rw // 2 - aura_margin,
+                    center_y - rh // 2 - aura_margin,
+                    rw + aura_margin * 2,
+                    rh + aura_margin * 2
+                )
+                aura_surf = pygame.Surface((aura_rect.width, aura_rect.height), pygame.SRCALPHA)
+                pygame.draw.rect(aura_surf, (*COL_ACCENT, aura_alpha),
+                                 (0, 0, aura_rect.width, aura_rect.height), width=3, border_radius=14)
+                screen.blit(aura_surf, (aura_rect.x, aura_rect.y))
+
+            # Alpha for side covers (smooth continuous fade)
             if dist > 0.1:
-                alpha = max(80, int(255 - dist * 60))
+                alpha = max(70, int(255 - dist * 55))
                 surf.set_alpha(alpha)
                 screen.blit(surf, (int(x) - rw // 2, center_y - rh // 2))
                 surf.set_alpha(255)
@@ -476,83 +667,115 @@ class Carousel:
     # ── Arrows ──────────────────────────────────────────────────────────────
 
     def _draw_arrows(self, screen: pygame.Surface):
-        """Draw left/right navigation arrows."""
-        arrow_y = self.H // 2           # match cover center
+        """Draw floating, pulsing navigation arrows."""
+        now = pygame.time.get_ticks()
+        float_offset = math.sin(now * 0.004) * (self.W * 0.006)
+        pulse = 0.75 + 0.25 * math.sin(now * 0.005)
+        arrow_col = (
+            min(255, int(COL_ARROW[0] * pulse)),
+            min(255, int(COL_ARROW[1] * pulse)),
+            min(255, int(COL_ARROW[2] * pulse)),
+            int(COL_ARROW[3] * pulse),
+        )
+
+        arrow_y = self.H // 2
         arrow_size = int(self.H * 0.025)
         margin = int(self.W * 0.04)
 
-        # Left arrow ◄
-        left_x = margin
+        # Left arrow ◄ with floating motion
+        left_x = margin + float_offset
         pts_l = [
             (left_x + arrow_size, arrow_y - arrow_size),
             (left_x, arrow_y),
             (left_x + arrow_size, arrow_y + arrow_size),
         ]
         arrow_surf = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
-        pygame.draw.polygon(arrow_surf, COL_ARROW, pts_l)
-        screen.blit(arrow_surf, (0, 0))
+        pygame.draw.polygon(arrow_surf, arrow_col, pts_l)
 
-        # Right arrow ►
-        right_x = self.W - margin
+        # Right arrow ► with floating motion
+        right_x = self.W - margin - float_offset
         pts_r = [
             (right_x - arrow_size, arrow_y - arrow_size),
             (right_x, arrow_y),
             (right_x - arrow_size, arrow_y + arrow_size),
         ]
-        pygame.draw.polygon(arrow_surf, COL_ARROW, pts_r)
+        pygame.draw.polygon(arrow_surf, arrow_col, pts_r)
         screen.blit(arrow_surf, (0, 0))
 
     # ── Sub-menu overlay ────────────────────────────────────────────────────
 
     def _draw_submenu(self, screen: pygame.Surface):
-        """Draw the launch script selection sub-menu."""
-        # Full-screen dim
+        """Draw the launch script selection sub-menu with smooth pop-in and sliding selector."""
+        if self._submenu_anim <= 0.001:
+            return
+
+        t = _ease_out_cubic(self._submenu_anim)
+
+        # Full-screen dim with smooth fade-in
         dim = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
-        dim.fill((0, 0, 0, 160))
+        dim.fill((0, 0, 0, int(160 * t)))
         screen.blit(dim, (0, 0))
 
         game_name = self.games[self._index]["name"]
 
-        # Panel
-        panel_w = int(self.W * 0.7)
+        # Panel dimensions with subtle scale-in animation (0.92 -> 1.0)
+        base_w = int(self.W * 0.7)
         line_h = int(self.H * 0.045)
-        panel_h = line_h * (len(self._submenu_scripts) + 2) + 60
+        base_h = line_h * (len(self._submenu_scripts) + 2) + 60
+
+        scale = 0.92 + 0.08 * t
+        panel_w = int(base_w * scale)
+        panel_h = int(base_h * scale)
         px = (self.W - panel_w) // 2
         py = (self.H - panel_h) // 2
 
+        alpha_byte = int(255 * t)
         panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        pygame.draw.rect(panel, COL_SUBMENU_BG,
-                         (0, 0, panel_w, panel_h), border_radius=16)
-        pygame.draw.rect(panel, (*COL_ACCENT, 100),
-                         (0, 0, panel_w, panel_h), width=2, border_radius=16)
+        bg_col = (COL_SUBMENU_BG[0], COL_SUBMENU_BG[1], COL_SUBMENU_BG[2], int(COL_SUBMENU_BG[3] * t))
+        pygame.draw.rect(panel, bg_col, (0, 0, panel_w, panel_h), border_radius=16)
+        border_col = (*COL_ACCENT, int(140 * t))
+        pygame.draw.rect(panel, border_col, (0, 0, panel_w, panel_h), width=2, border_radius=16)
         screen.blit(panel, (px, py))
 
         # Title
         max_sub_w = panel_w - 40
         title = self._render_fitted_text(f"Launch: {game_name}", COL_ACCENT,
                                          max_sub_w, max_size=int(self.H * 0.024))
+        title.set_alpha(alpha_byte)
         screen.blit(title, title.get_rect(center=(self.W // 2, py + line_h + 10)))
+
+        # Update smooth selector Y position
+        target_sel_y = py + line_h * (self._submenu_index + 2) + 20
+        if self._submenu_sel_y == 0.0:
+            self._submenu_sel_y = target_sel_y
+        else:
+            self._submenu_sel_y += (target_sel_y - self._submenu_sel_y) * (1.0 - math.exp(-20.0 * (1.0 / 60.0)))
+
+        # Draw sliding selection pill
+        sel_rect = pygame.Surface((panel_w - 32, line_h - 4), pygame.SRCALPHA)
+        pygame.draw.rect(sel_rect, (*COL_ACCENT, int(55 * t)),
+                         (0, 0, panel_w - 32, line_h - 4), border_radius=8)
+        pygame.draw.rect(sel_rect, (*COL_ACCENT, int(160 * t)),
+                         (0, 0, panel_w - 32, line_h - 4), width=1, border_radius=8)
+        screen.blit(sel_rect, (px + 16, int(self._submenu_sel_y)))
+
+        # Left indicator bar
+        bar_surf = pygame.Surface((4, line_h - 12), pygame.SRCALPHA)
+        bar_surf.fill((*COL_ACCENT, int(230 * t)))
+        screen.blit(bar_surf, (px + 22, int(self._submenu_sel_y) + 4))
 
         # Script entries
         for i, script in enumerate(self._submenu_scripts):
             y = py + line_h * (i + 2) + 20
             is_sel = (i == self._submenu_index)
-
-            if is_sel:
-                sel_rect = pygame.Surface((panel_w - 32, line_h - 4), pygame.SRCALPHA)
-                pygame.draw.rect(sel_rect, (*COL_ACCENT, 50),
-                                 (0, 0, panel_w - 32, line_h - 4), border_radius=8)
-                screen.blit(sel_rect, (px + 16, y))
-
-                # Selection indicator
-                pygame.draw.rect(screen, COL_ACCENT,
-                                 (px + 20, y + 4, 3, line_h - 12), border_radius=2)
-
             color = COL_SUBMENU_SEL if is_sel else COL_SUBMENU_TXT
+
             label = self._font_sub_sm.render(script.get("name", "?"), True, color)
+            label.set_alpha(alpha_byte)
             screen.blit(label, label.get_rect(midleft=(px + 36, y + line_h // 2 - 2)))
 
         # Hint at bottom of panel
         hint_text = self._font_hint.render("↑↓ Select  │  A Confirm  │  B Back", True, COL_HINT)
+        hint_text.set_alpha(alpha_byte)
         screen.blit(hint_text, hint_text.get_rect(
             center=(self.W // 2, py + panel_h - 20)))

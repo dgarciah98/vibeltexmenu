@@ -9,10 +9,11 @@ display:
 audio:
   # Device name — run `python -c "import os; os.environ['SD_ENABLE_ASIO']='1'; import sounddevice; print(sounddevice.query_devices())"` to list.
   # ASIO is auto-enabled. Examples:
+  #   ASIO:   "XONAR SOUND CARD(64)"
   #   ASIO:   "Focusrite USB ASIO"
-  #   WASAPI: "Altavoces (Focusrite USB Audio), Windows WASAPI"
+  #   WASAPI: "Altavoces (ASUS Xonar AE), Windows WASAPI"
   # Leave empty to use system default output.
-  device: "Focusrite USB ASIO"
+  device: "XONAR SOUND CARD(64)"
   output_channels: [0, 1]   # zero-based channel selectors (used with ASIO devices)
   sample_rate: 44100
   crossfade_ms: 80             # BGM crossfade duration in milliseconds (near-instant)
@@ -58,3 +59,21 @@ input:
   navigate_cooldown_ms: 40   # debounce delay for navigation repeats
   axis_deadzone: 0.5          # threshold for axis-based navigation
   show_inputs: true           # display inputs visually on screen
+
+sdvxio:
+  enabled: true               # direct bemanitools IO support without ViGEm
+  dll_path: "IO/sdvxio.dll"   # path to sdvxio DLL relative to launcher
+  knob_sensitivity: 15        # encoder ticks before triggering navigation
+  key_lights: true            # illuminate button lamps when pressed
+  wing_lights: true           # illuminate cabinet wings according to background picture
+  wing_brightness: 1.0        # master brightness multiplier for wings (0.0 - 1.0)
+  start_lamp_attract: true    # keep start button lamp lit as attract mode
+  buttons:
+    START: confirm
+    FX_L: back
+    FX_R: back
+    A: navigate_left
+    B: navigate_left
+    C: navigate_right
+    D: navigate_right
+

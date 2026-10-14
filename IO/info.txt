@@ -1,0 +1,7 @@
+put these files in this directory:
+libacc.dll
+libacio.dll
+libaio.dll
+libaio-iob.dll
+libaio-iob2_video.dll
+sdvxio.dll (renamed from sdvxio-valk, https://github.com/adamaq01/bemanitools/tree/sdvxio-valk) 

@@ -70,7 +70,20 @@ class AudioManager:
 
         # Apply ASIO channel selectors only when the device is an ASIO device
         extra = None
-        is_asio = self._device and "asio" in self._device.lower()
+        is_asio = False
+        if self._device:
+            dev_lower = self._device.lower()
+            if "asio" in dev_lower or "xonar" in dev_lower:
+                is_asio = True
+            else:
+                try:
+                    dev_info = sd.query_devices(self._device)
+                    hostapi = sd.query_hostapis(dev_info["hostapi"])
+                    if "asio" in hostapi["name"].lower():
+                        is_asio = True
+                except Exception:
+                    pass
+
         if is_asio:
             try:
                 extra = sd.AsioSettings(channel_selectors=self._channels_sel)
