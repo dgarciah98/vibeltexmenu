@@ -52,12 +52,24 @@ DEFAULT_SETTINGS = {
         "axis_deadzone": 0.5,
         "show_inputs": True,
     },
+    "carousel": {
+        "cover_aspect_ratio_width": 9,
+        "cover_aspect_ratio_height": 16,
+        "title_color": [255, 255, 255],
+        "bg_color": [12, 12, 20],
+        "accent_color": [90, 140, 255],
+        "accent_dim_color": [60, 90, 180],
+        "submenu_bg_color": [18, 18, 30, 230],
+        "submenu_selected_color": [90, 140, 255, 255],
+        "submenu_text_color": [220, 220, 240, 255],
+        "hint_color": [120, 120, 160],
+        "arrow_color": [180, 200, 255, 200],
+    },
     "grid_menu": {
         "cover_aspect_ratio_width": 9,
         "cover_aspect_ratio_height": 16,
         "rows": 2,
-        "font_size": 32,
-        "font_color": [255, 255, 255, 255],
+        "title_color": [255, 255, 255, 255],
         "bg_color": [12, 12, 20, 255],
         "accent_color": [90, 140, 255, 255],
         "submenu_bg_color": [18, 18, 30, 230],
@@ -145,12 +157,24 @@ keybinds:
     index: 0
     value: [0, -1]
 
+carousel:
+  cover_aspect_ratio_width: 9
+  cover_aspect_ratio_height: 16
+  title_color: [255, 255, 255]
+  bg_color: [12, 12, 20]
+  accent_color: [90, 140, 255]
+  accent_dim_color: [60, 90, 180]
+  submenu_bg_color: [18, 18, 30, 230]
+  submenu_selected_color: [90, 140, 255, 255]
+  submenu_text_color: [220, 220, 240, 255]
+  hint_color: [120, 120, 160]
+  arrow_color: [180, 200, 255, 200]
+    
 grid_menu:
   cover_aspect_ratio_width: 16
   cover_aspect_ratio_height: 9
   rows: 2
-  font_size: 32
-  font_color: [255, 255, 255, 255]
+  title_color: [255, 255, 255, 255]
   bg_color: [12, 12, 20, 255]
   accent_color: [90, 140, 255, 255]
   submenu_bg_color: [18, 18, 30, 230]

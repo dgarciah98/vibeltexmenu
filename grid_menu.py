@@ -25,33 +25,26 @@ class GridMenu:
         display = settings["display"]
         touchscreen = settings["touchscreen"]
 
-        if "cover_aspect_ratio_width" in grid_menu and "cover_aspect_ratio_height" in grid_menu:
-            global COVER_ASPECT
-            COVER_ASPECT = grid_menu["cover_aspect_ratio_width"] / grid_menu["cover_aspect_ratio_height"]
+        global COVER_ASPECT
+        COVER_ASPECT = grid_menu["cover_aspect_ratio_width"] / grid_menu["cover_aspect_ratio_height"]
         
-        if "font_color" in grid_menu:
-            global COL_TITLE
-            COL_TITLE = tuple(grid_menu["font_color"])
+        global COL_TITLE
+        COL_TITLE = tuple(grid_menu["title_color"])
 
-        if "bg_color" in grid_menu:
-            global COL_BG
-            COL_BG = tuple(grid_menu["bg_color"])
+        global COL_BG
+        COL_BG = tuple(grid_menu["bg_color"])
 
-        if "accent_color" in grid_menu:
-            global COL_ACCENT
-            COL_ACCENT = tuple(grid_menu["accent_color"])
+        global COL_ACCENT
+        COL_ACCENT = tuple(grid_menu["accent_color"])
 
-        if "submenu_bg_color" in grid_menu:
-            global COL_SUBMENU_BG
-            COL_SUBMENU_BG = tuple(grid_menu["submenu_bg_color"])
+        global COL_SUBMENU_BG
+        COL_SUBMENU_BG = tuple(grid_menu["submenu_bg_color"])
 
-        if "submenu_selected_color" in grid_menu:
-            global COL_SUBMENU_SEL
-            COL_SUBMENU_SEL = tuple(grid_menu["submenu_selected_color"])
+        global COL_SUBMENU_SEL
+        COL_SUBMENU_SEL = tuple(grid_menu["submenu_selected_color"])
 
-        if "submenu_text_color" in grid_menu:
-            global COL_SUBMENU_TXT
-            COL_SUBMENU_TXT = tuple(grid_menu["submenu_text_color"])
+        global COL_SUBMENU_TXT
+        COL_SUBMENU_TXT = tuple(grid_menu["submenu_text_color"])
 
         # Window settings
         self._landscape = display["landscape"]
