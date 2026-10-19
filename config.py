@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
         "sample_rate": 44100,
         "crossfade_ms": 80,
         "volume": 0.7,
+        "bgm_gain": 0.5,
     },
     "keybinds": {
         "navigate_up":   {"type": "hat", "index": 0, "value": [0, 1]},
@@ -110,6 +111,7 @@ audio:
   sample_rate: 44100
   crossfade_ms: 80          # BGM crossfade duration in milliseconds
   volume: 0.7               # master volume 0.0 - 1.0
+  bgm_gain: 0.5              # BGM volume multiplier 0.0 - 1.0
 
 keybinds:
   navigate_up:
